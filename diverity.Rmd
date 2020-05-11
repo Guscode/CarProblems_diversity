@@ -78,3 +78,51 @@ for(level in levels(total$kaiscore)){
 }
 ```
 
+```{r}
+p_load(brms,rethinking)
+
+total$kaiscore <- as.numeric(total$kaiscore)
+total$scaled_scores <- scale(total$AllScores)
+
+model <- bf(
+  scaled_scores| trunc(lb = -8,ub=3)~kaiscore+aiRange+kaiscore:aiRange, family = skew_normal()
+)
+
+max(total$scaled_scores)
+dens(total$scaled_scores)
+get_prior(model, data = total)
+
+dens(total$kaiscore)
+priors <- c(
+  prior(normal(-2.5,.5), class = alpha),
+  prior(normal(0, .05), class =Intercept),
+  prior(normal(0,.01), class = b),
+  prior(normal(0,.02), class = sigma)
+)
+
+
+pp <- brm(
+  model, 
+  prior = priors,
+  data = total,
+  init = 0.01,
+  cores = 4,
+  sample_prior = "only"
+)
+
+f<- fitted(pp, summary = F, scale = "linear") %>% 
+  as_tibble() %>% 
+  as.data.frame()
+f <- t(f)
+f <- as.data.frame(f)
+summary(pp)
+p <- posterior_samples(pp)
+dens(p$lp__)
+pp_check(pp, nsamples = 100)
+
+
+dens(f[c(1:10)])
+skew_normal()
+
+```
+
