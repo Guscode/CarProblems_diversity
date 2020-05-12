@@ -19,7 +19,9 @@ files
 files <- c(files,files2)
 
 df<- read.csv(files[1])
-
+newCars <- read.csv("Car_aitotal.csv")
+newCars$filename <- newCars$AllAiScores
+newCars$AllAiScores <- 0
 total <- as.data.frame(matrix(0,ncol=4,nrow=1))
 colnames(total) <- c(colnames(df), "filename")
 for(file in files){
@@ -29,6 +31,7 @@ for(file in files){
 }
 
 total <- total[-1,]
+total <- rbind(total, newCars)
 
 
 total$kaiscore <- str_remove(total$filename, "results2")
@@ -58,7 +61,6 @@ total <- total %>%
          mean_kaiscore = mean_KAI(kaiscore_numeric,aiRange,33 ) )
 
 write.csv(total, "all_the_data.csv")
-
 ```
 
 
@@ -79,13 +81,16 @@ for(level in levels(total$kaiscore)){
 ```
 
 ```{r}
-p_load(brms,rethinking)
+p_load(brms,rethinking, bayesplot)
 
-total$kaiscore <- as.numeric(total$kaiscore)
+total$kaiscore <- as.numeric(as.character(total$kaiscore))
 total$scaled_scores <- scale(total$AllScores)
+total$kaiscore_scale <- scale(total$kaiscore)
+total$aiRange_scale <- scale(total$aiRange)
+total$mean_kaiscore_scale <- scale(total$mean_kaiscore)
 
 model <- bf(
-  scaled_scores| trunc(lb = -8,ub=3)~kaiscore+aiRange+kaiscore:aiRange, family = skew_normal()
+  scaled_scores | trunc(ub = 1.5) ~ 1 + mean_kaiscore_scale+aiRange_scale+mean_kaiscore_scale:aiRange_scale, family = gaussian
 )
 
 max(total$scaled_scores)
@@ -94,10 +99,9 @@ get_prior(model, data = total)
 
 dens(total$kaiscore)
 priors <- c(
-  prior(normal(-2.5,.5), class = alpha),
-  prior(normal(0, .05), class =Intercept),
-  prior(normal(0,.01), class = b),
-  prior(normal(0,.02), class = sigma)
+  prior(normal(0, .5), class =Intercept),
+  prior(normal(0,.1), class = b),
+  prior(normal(0,.05), class = sigma)
 )
 
 
@@ -105,24 +109,35 @@ pp <- brm(
   model, 
   prior = priors,
   data = total,
-  init = 0.01,
   cores = 4,
-  sample_prior = "only"
+  sample_prior = "only",
+  control = list(adapt_delta = 0.9)
 )
 
-f<- fitted(pp, summary = F, scale = "linear") %>% 
-  as_tibble() %>% 
-  as.data.frame()
-f <- t(f)
-f <- as.data.frame(f)
-summary(pp)
-p <- posterior_samples(pp)
-dens(p$lp__)
+
 pp_check(pp, nsamples = 100)
 
+mcmc_trace(pp)
 
-dens(f[c(1:10)])
-skew_normal()
+ppp <- brm(
+  model, 
+  prior = priors,
+  data = total,
+  cores = 4,
+  sample_prior = T,
+  control = list(adapt_delta = 0.9)
+)
+
+pp_check(ppp, nsamples = 100)
+mcmc_trace(ppp)
+
+summary(ppp)
+
+hypothesis(ppp, c("aiRange_scale > 0",
+                  "mean_kaiscore_scale > 0",
+                  "mean_kaiscore_scale:aiRange_scale < 0"))
+
+conditional_effects(ppp)
 
 ```
 
