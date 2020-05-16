@@ -1,0 +1,170 @@
+---
+title: "Beam_problem"
+output: html_document
+---
+
+
+
+```{r}
+library(pacman)
+p_load(tidyverse,stringr)
+
+
+
+files <- list.files("results/rawdata/")
+files <- files[1:9]
+files <- paste("results/rawdata/", files,sep="")
+files2 <- list.files("results2/rawdata/")
+files2 <- files2[1:9]
+files2 <- paste("results2/rawdata/", files2,sep="")
+files <- c(files,files2)
+
+df<- read.csv(files[1])
+beams <- as.data.frame(matrix(0,ncol=5,nrow=1))
+colnames(df)
+colnames(beams) <- c(colnames(df), "filename")
+for(file in files){
+  df<- read.csv(file)
+  df$filename <- file
+  alist <- c()
+  for(i in 1:5){
+    a <- (df$AllScores[i])
+    b<- as.numeric(unlist(str_split(str_remove_all(as.character(a), "\\[|\\]"), ",")))
+    alist <- c(alist, b)
+  }
+  df$AllScores <- alist
+  beams <- rbind(beams,df)
+}
+beams <- beams[-1,]
+
+alist <- c()
+newBeams <- read.csv("Beam_aitotal.csv")
+for(i in 1:16){
+  a <- (newBeams$AllScores[i])
+  b<- as.numeric(unlist(str_split(str_remove_all(as.character(a), "\\[|\\]"), ",")))
+  alist <- c(alist, b)
+}
+newBeams$AllScores <- alist
+newBeams$filename <- 0
+beams$orig <- 1
+newBeams$orig <- 0
+beams <- rbind(beams,newBeams)
+
+
+beams$kaiscore <- str_remove(beams$filename, "results2")
+beams$kaiscore <- str_remove((str_extract(beams$kaiscore, "[:digit:].*")), ".csv")
+beams$kaiscore<- ifelse(substr(beams$kaiscore, 1,1)=="2", str_sub(beams$kaiscore, 2),beams$kaiscore)
+
+beams$AllScores <- as.numeric(beams$AllScores)
+beams$AiRanges <- as.factor(beams$AllAiScores)
+beams$kaiscore <- as.factor(beams$kaiscore)
+
+#function for calculating mean kai pr. team
+mean_KAI <- function(aiScore, aiRange, nAgents){
+  minScore = max(c(40, aiScore-aiRange/2.0))
+  maxScore = min(c(150, aiScore+aiRange/2.0))
+  aiScores = seq(minScore,maxScore,length.out =  nAgents)
+  m <- mean(aiScores)
+  return(m)
+}
+
+beams$aiRange <- as.numeric(as.character(beams$AllAiScores))
+beams$kaiscore_numeric <- as.numeric(as.character(beams$kaiscore))
+beams <- beams %>% 
+  group_by(kaiscore,AllAiScores) %>% 
+  mutate(mean_score = mean(AllScores),
+         sd_score = sd(AllScores),
+         max_score = max(AllScores),
+         mean_kaiscore = mean_KAI(kaiscore_numeric,aiRange,33 ) )
+
+means <- beams[beams$orig==0,] %>% 
+  group_by(mean_kaiscore) %>% 
+  summarise(mean_beamperformance = mean(AllScores))
+levels(as.factor(beams$mean_kaiscore))
+```
+
+```{r}
+for(level in levels(beams$kaiscore)){
+  a <- ggplot(beams[beams$kaiscore == level,], aes(AllAiScores, AllScores, group = AllAiScores)) +
+    geom_point()+   
+    stat_summary(fun.y = mean, colour="blue", geom="line", aes(group=1))+
+    geom_point(beams[beams$kaiscore == level,],mapping= aes(AllAiScores,mean_score, color = "red"))+
+    geom_errorbar(aes(ymin=mean_score-sd_score, ymax=mean_score+sd_score), width=.2,
+                 position=position_dodge(0.05),color="red", alpha = .5)+
+    ggtitle(paste("mean Kaiscore = ", as.character(level), sep = " "))+
+    xlab("KaiRange")+ylab("Beam Design Performance")+
+    ylim(-18,-12)
+  
+  print(a)
+}
+
+dens(beams$AllScores)
+```
+
+
+
+```{r}
+p_load(brms,rethinking, bayesplot)
+total_beam <- beams[beams$orig == 1,]
+total_beam$kaiscore <- as.numeric(as.character(total_beam$kaiscore))
+total_beam$scaled_scores <- scale(total_beam$AllScores)
+total_beam$kaiscore_scale <- scale(total_beam$kaiscore)
+total_beam$aiRange_scale <- scale(total_beam$aiRange)
+total_beam$mean_kaiscore_scale <- scale(total_beam$mean_kaiscore)
+total_beam <- total_beam[total_beam$scaled_scores < 3,]
+model_beam <- bf(
+  scaled_scores ~ 1 + mean_kaiscore_scale+aiRange_scale+mean_kaiscore_scale:aiRange_scale, family = skew_normal()
+)
+total_beam <- total_beam[total_beam$scaled_scores>-3,]
+dens(total_beam$scaled_scores)
+plot(total_beam$AllScores)
+min(total_beam$scaled_scores)
+dens(total_beam$scaled_scores)
+get_prior(model_beam, data = total_beam)
+
+dens(total$kaiscore)
+priors <- c(
+  prior(normal(0,8),class=alpha),
+  prior(normal(0, .5), class =Intercept),
+  prior(normal(0,.1), class = b),
+  prior(normal(0,.05), class = sigma)
+)
+
+
+pp <- brm(
+  model_beam, 
+  prior = priors,
+  data = total_beam,
+  family = "skew_normal",
+  cores = 4,
+  sample_prior = "only",
+  control = list(adapt_delta = 0.9)
+)
+
+
+pp_check(pp, nsamples = 100)
+
+mcmc_trace(pp)
+
+ppp <- brm(
+  model_beam, 
+  prior = priors,
+  data = total_beam,
+  cores = 4,
+  sample_prior = T,
+  control = list(adapt_delta = 0.9)
+)
+
+pp_check(ppp, nsamples = 100)
+mcmc_trace(ppp)
+
+summary(ppp)
+
+hypothesis(ppp, c("aiRange_scale < 0",
+                  "mean_kaiscore_scale > 0",
+                  "mean_kaiscore_scale:aiRange_scale < 0"))
+
+conditional_effects(ppp)
+```
+```
+
